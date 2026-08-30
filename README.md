@@ -219,7 +219,8 @@ while status.status != "complete" && status.status != "error" {
 | `getFileMeta(fileId:)` | Fetch metadata for a private file |
 | `getPublicFileMeta(fileId:query:)` | Fetch metadata for a public file |
 | `updateFile(fileId:isPrivate:title:description:tags:)` | Update mutable fields on a file |
-| `deleteFile(fileId:)` | Permanently delete a file |
+| `deleteFile(fileId:)` | Delete a file — returns `DeleteFileResult` (`.deleted`, `.queued`, or `.conflict`) instead of throwing on 409 |
+| `markFileForDeletion(fileId:)` | Mark a file for deletion when it can't be deleted immediately (still processing) |
 | `getSignedUrl(fileId:ttl:disposition:)` | Get a time-limited signed URL |
 | `getFileUrl(fileId:ttl:)` | Convenience — returns the signed URL string |
 | `getHlsStreamUrl(fileId:)` | Build the HLS master playlist URL (no network call) |

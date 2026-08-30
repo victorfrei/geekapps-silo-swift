@@ -75,9 +75,54 @@ public actor SiloClient {
         let _: EmptyResponse = try await request("/files/\(fileId)", method: "PATCH", body: data, contentType: "application/json")
     }
 
-    /// Permanently delete a file.
-    public func deleteFile(fileId: String) async throws {
-        let _: EmptyResponse = try await request("/files/\(fileId)", method: "DELETE")
+    /// Delete a file by id.
+    ///
+    /// Maps the API's status codes to a typed ``DeleteFileResult`` instead of throwing:
+    /// - 204: deleted (or already gone/not found)
+    /// - 202: deletion queued (storage objects are purged asynchronously)
+    /// - 409: cannot delete yet (FAILED, or still processing — retry later or use ``markFileForDeletion(fileId:)``)
+    public func deleteFile(fileId: String) async throws -> DeleteFileResult {
+        let urlString = options.baseUrl + "/files/\(fileId)"
+        guard let url = URL(string: urlString) else {
+            throw SiloError.invalidURL(urlString)
+        }
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "DELETE"
+        if let token = options.token {
+            urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else {
+            throw SiloError.invalidResponse
+        }
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+        switch http.statusCode {
+        case 204:
+            return .deleted
+        case 202:
+            struct QueuedBody: Decodable { let ok: Bool; let message: String }
+            let body = try decoder.decode(QueuedBody.self, from: data)
+            return .queued(message: body.message)
+        case 409:
+            struct ConflictBody: Decodable { let error: String; let canMarkForDeletion: Bool? }
+            let body = try decoder.decode(ConflictBody.self, from: data)
+            return .conflict(error: body.error, canMarkForDeletion: body.canMarkForDeletion ?? false)
+        default:
+            let bodyString = String(data: data, encoding: .utf8) ?? ""
+            throw SiloError.httpError(statusCode: http.statusCode, body: bodyString)
+        }
+    }
+
+    /// Mark a file for deletion when it can't be deleted immediately (e.g. still processing).
+    /// The server will delete it once it reaches a terminal state.
+    public func markFileForDeletion(fileId: String) async throws {
+        let _: EmptyResponse = try await request("/files/\(fileId)/mark-for-deletion", method: "POST")
     }
 
     /// Obtain a time-limited signed URL for a private file.

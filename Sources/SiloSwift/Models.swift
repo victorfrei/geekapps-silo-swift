@@ -144,7 +144,7 @@ public struct SiloFile: Codable, Sendable {
     public let directUrl: String?
     public let mimeType: String?
     public let size: Int?
-    public let status: String?
+    public let status: SiloFileStatus?
     public let category: String?
     public let title: String?
     public let description: String?
@@ -167,7 +167,7 @@ public struct SiloFile: Codable, Sendable {
     public init(
         id: String, key: String, bucket: String, url: String? = nil,
         directUrl: String? = nil, mimeType: String? = nil, size: Int? = nil,
-        status: String? = nil, category: String? = nil, title: String? = nil,
+        status: SiloFileStatus? = nil, category: String? = nil, title: String? = nil,
         description: String? = nil, tags: [String]? = nil,
         isPrivate: Bool? = nil, expiresAt: Date? = nil,
         createdAt: Date? = nil, updatedAt: Date? = nil,
@@ -191,6 +191,60 @@ public struct SiloFile: Codable, Sendable {
     }
 }
 
+// MARK: - File Status
+
+/// All possible `SiloFile.status` values from the Silo API.
+/// `.ready`, `.failed`, `.cancelled` and `.deleted` are terminal; everything else means
+/// processing is still in flight. Raw uploads (`ImageUploadOptions.raw`/`VideoUploadOptions.raw`)
+/// skip the pipeline entirely and go straight to `.ready`.
+public enum SiloFileStatus: String, Codable, Sendable {
+    case created = "CREATED"
+    case uploading = "UPLOADING"
+    case ingesting = "INGESTING"
+    case queued = "QUEUED"
+    case processing = "PROCESSING"
+    case finished = "FINISHED"
+    case syncing = "SYNCING"
+    case partialReady = "PARTIAL_READY"
+    case ready = "READY"
+    case failed = "FAILED"
+    case cancelled = "CANCELLED"
+    case deleted = "DELETED"
+
+    /// True when this is a terminal, fully-processed state.
+    public var isReady: Bool { self == .ready }
+    /// True when the file is still going through the processing pipeline.
+    public var isProcessing: Bool {
+        switch self {
+        case .ready, .failed, .cancelled, .deleted: return false
+        default: return true
+        }
+    }
+    /// True when processing failed or the upload was cancelled.
+    public var isFailed: Bool { self == .failed || self == .cancelled }
+}
+
+// MARK: - Delete
+
+/// Outcome of a ``SiloClient/deleteFile(fileId:)`` call, mapped from the API's HTTP status code.
+public enum DeleteFileResult: Sendable {
+    /// 204 — deleted synchronously (or the file was already gone).
+    case deleted
+    /// 202 — deletion queued; storage objects are purged asynchronously.
+    case queued(message: String)
+    /// 409 — cannot delete yet (FAILED, or still processing). `canMarkForDeletion` hints whether
+    /// `markFileForDeletion` can be used instead.
+    case conflict(error: String, canMarkForDeletion: Bool)
+
+    /// Convenience: true for `.deleted` and `.queued` (i.e. the delete was accepted).
+    public var isDeleted: Bool {
+        switch self {
+        case .deleted, .queued: return true
+        case .conflict: return false
+        }
+    }
+}
+
 // MARK: - Upload Models
 
 /// Result returned after a completed upload.
@@ -202,13 +256,20 @@ public struct UploadResult: Codable, Sendable {
     public let directUrl: String?
     public let mimeType: String?
     public let size: Int?
-    public let status: String?
+    public let status: SiloFileStatus?
     public let category: String?
+
+    /// True when `status` is a terminal, fully-processed state (raw uploads are `.ready` immediately).
+    public var isReady: Bool { status?.isReady ?? false }
+    /// True when the file is still going through the processing pipeline.
+    public var isProcessing: Bool { status?.isProcessing ?? false }
+    /// True when processing failed or the upload was cancelled.
+    public var isFailed: Bool { status?.isFailed ?? false }
 
     public init(
         id: String, key: String, bucket: String, url: String? = nil,
         directUrl: String? = nil, mimeType: String? = nil,
-        size: Int? = nil, status: String? = nil, category: String? = nil
+        size: Int? = nil, status: SiloFileStatus? = nil, category: String? = nil
     ) {
         self.id = id; self.key = key; self.bucket = bucket
         self.url = url; self.directUrl = directUrl; self.mimeType = mimeType
